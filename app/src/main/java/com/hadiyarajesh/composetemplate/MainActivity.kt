@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
-import androidx.compose.material3.SwitchDefaults
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -32,14 +31,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -56,6 +56,15 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
 
+// Imports for background network calls
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,12 +77,16 @@ fun SyncScreen() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("sync_prefs", Context.MODE_PRIVATE) }
 
+    // --- STATE VARIABLES ---
     val initialFolders: List<String> =
         prefs.getStringSet("folder_uris", emptySet())?.toList()?.sorted() ?: emptyList()
 
     var folderUris: List<String> by remember { mutableStateOf(initialFolders) }
     var driveConnected by remember { mutableStateOf(prefs.getBoolean("drive_connected", false)) }
+    var connectedEmail by remember { mutableStateOf(prefs.getString("user_email", "")) }
+    
     var showSyncDialog by remember { mutableStateOf(false) }
+    var showInfoDialog by remember { mutableStateOf(false) }
 
     val workInfos by WorkManager.getInstance(context)
         .getWorkInfosByTagLiveData("sync_job")
@@ -82,6 +95,7 @@ fun SyncScreen() {
     val activeWork = workInfos?.find { it.state == WorkInfo.State.RUNNING }
     val progressInt = activeWork?.progress?.getInt("progress", 0) ?: 0
 
+    // --- LAUNCHERS ---
     val authLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
@@ -90,17 +104,23 @@ fun SyncScreen() {
                 .getAuthorizationResultFromIntent(result.data)
 
             if (!authResult.accessToken.isNullOrBlank()) {
+                val token = authResult.accessToken!!
                 prefs.edit()
                     .putBoolean("drive_connected", true)
-                    .putString("drive_access_token", authResult.accessToken)
+                    .putString("drive_access_token", token)
                     .apply()
                 driveConnected = true
+                
+                // Fetch email right after getting the token
+                fetchAndSaveEmail(token, prefs) { fetchedEmail -> 
+                    connectedEmail = fetchedEmail 
+                }
             }
         } catch (e: Exception) {
-                android.util.Log.e("AuthError", "Auth Exception: ${e.message}", e)
-                Toast.makeText(context, "Sign-in failed. Check Logcat.", Toast.LENGTH_LONG).show()
-                driveConnected = false
-            }
+            android.util.Log.e("AuthError", "Auth Exception: ${e.message}", e)
+            Toast.makeText(context, "Sign-in failed. Check Logcat.", Toast.LENGTH_LONG).show()
+            driveConnected = false
+        }
     }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -125,9 +145,13 @@ fun SyncScreen() {
         }
     }
 
+    // --- AUTH FUNCTIONS ---
     fun startAuth() {
         val request = AuthorizationRequest.builder()
-            .setRequestedScopes(listOf(Scope("https://www.googleapis.com/auth/drive.file")))
+            .setRequestedScopes(listOf(
+                Scope("https://www.googleapis.com/auth/drive.file"),
+                Scope("email") // Added email scope
+            ))
             .build()
 
         Identity.getAuthorizationClient(context)
@@ -138,11 +162,16 @@ fun SyncScreen() {
                         IntentSenderRequest.Builder(result.pendingIntent!!.intentSender).build()
                     )
                 } else if (!result.accessToken.isNullOrBlank()) {
+                    val token = result.accessToken!!
                     prefs.edit()
                         .putBoolean("drive_connected", true)
-                        .putString("drive_access_token", result.accessToken)
+                        .putString("drive_access_token", token)
                         .apply()
                     driveConnected = true
+                    
+                    fetchAndSaveEmail(token, prefs) { fetchedEmail -> 
+                        connectedEmail = fetchedEmail 
+                    }
                 }
             }
             .addOnFailureListener { driveConnected = false }
@@ -150,11 +179,31 @@ fun SyncScreen() {
 
     fun disconnectDrive() {
         Identity.getSignInClient(context).signOut()
-        prefs.edit().putBoolean("drive_connected", false).remove("drive_access_token").apply()
+        prefs.edit()
+            .putBoolean("drive_connected", false)
+            .remove("drive_access_token")
+            .remove("user_email") // Wipe saved email
+            .apply()
+            
         driveConnected = false
+        connectedEmail = "" // Clear from UI
         WorkManager.getInstance(context).cancelAllWorkByTag("sync_job")
     }
 
+    // --- DIALOGS ---
+    if (showInfoDialog) {
+        AlertDialog(
+            onDismissRequest = { showInfoDialog = false },
+            title = { Text("About", fontWeight = FontWeight.Bold) },
+            text = { Text("Made with love by Kiran Rao ❤️") },
+            confirmButton = {
+                TextButton(onClick = { showInfoDialog = false }) {
+                    Text("Close", color = Color(0xFF212121))
+                }
+            }
+        )
+    }
+        
     if (showSyncDialog) {
         AlertDialog(
             onDismissRequest = { showSyncDialog = false },
@@ -177,9 +226,7 @@ fun SyncScreen() {
                         triggerSync(context, "add")
                         showSyncDialog = false
                     },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = Color(0xFF2196F3)
-                    )
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF2196F3))
                 ) {
                     Text("ADD NEW")
                 }
@@ -187,6 +234,7 @@ fun SyncScreen() {
         )
     }
 
+    // --- MAIN UI LAYOUT ---
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -195,12 +243,23 @@ fun SyncScreen() {
     ) {
         Spacer(modifier = Modifier.height(24.dp))
 
-        Text(
-            text = "K's GDrive Syncer",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Light
-        )
+        // Top Bar
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "K's GDrive Syncer",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Light
+            )
+            IconButton(onClick = { showInfoDialog = true }) {
+                Text("ℹ️", fontSize = 24.sp)
+            }
+        }
 
+        // Progress Indicator
         if (activeWork != null) {
             Column(modifier = Modifier.padding(vertical = 16.dp)) {
                 LinearProgressIndicator(
@@ -218,6 +277,7 @@ fun SyncScreen() {
             Spacer(modifier = Modifier.height(24.dp))
         }
 
+        // Add Folder Button
         Button(
             onClick = { folderPickerLauncher.launch(null) },
             modifier = Modifier
@@ -231,6 +291,7 @@ fun SyncScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // Folder List
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(folderUris) { uri: String ->
                 val name: String = DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name ?: "Folder"
@@ -246,18 +307,14 @@ fun SyncScreen() {
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-Column(modifier = Modifier.weight(1f)) {
-                            // Show the Folder Name
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = name,
                                 fontWeight = FontWeight.Medium
                             )
-                            // Decode the ugly URI into a readable path
                             val readablePath = android.net.Uri.decode(uri)
                                 .substringAfter("tree/")
                                 .replace("primary:", "Internal Storage/")
-                            
-                            // Show the Path below it
                             Text(
                                 text = readablePath,
                                 fontSize = 12.sp,
@@ -280,6 +337,7 @@ Column(modifier = Modifier.weight(1f)) {
             }
         }
 
+        // Sync Button
         if (driveConnected && folderUris.isNotEmpty()) {
             Button(
                 onClick = { showSyncDialog = true },
@@ -293,24 +351,44 @@ Column(modifier = Modifier.weight(1f)) {
             }
         }
 
+        // Bottom Toggle & Email Text (Fixed Layout)
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Connect to Google Drive")
-Switch(
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Connect to Google Drive", 
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 16.sp
+                )
+                
+                if (driveConnected && !connectedEmail.isNullOrBlank()) {
+                    Text(
+                        text = connectedEmail ?: "",
+                        fontSize = 13.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+            
+            Switch(
                 checked = driveConnected,
                 onCheckedChange = { if (it) startAuth() else disconnectDrive() },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
-                    checkedTrackColor = Color(0xFF4CAF50) // Material Green
+                    checkedTrackColor = Color(0xFF4CAF50)
                 )
             )
         }
     }
 }
 
+// --- HELPER FUNCTIONS ---
 fun triggerSync(context: Context, mode: String) {
     val request = OneTimeWorkRequestBuilder<DriveSyncWorker>()
         .addTag("sync_job")
@@ -318,4 +396,25 @@ fun triggerSync(context: Context, mode: String) {
         .build()
 
     WorkManager.getInstance(context).enqueue(request)
+}
+
+fun fetchAndSaveEmail(token: String, prefs: android.content.SharedPreferences, onEmailFetched: (String) -> Unit) {
+    CoroutineScope(Dispatchers.IO).launch {
+        try {
+            val url = URL("https://www.googleapis.com/oauth2/v3/userinfo?access_token=$token")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            
+            val response = connection.inputStream.bufferedReader().readText()
+            val email = JSONObject(response).getString("email")
+            
+            prefs.edit().putString("user_email", email).apply()
+            
+            withContext(Dispatchers.Main) {
+                onEmailFetched(email)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 }
