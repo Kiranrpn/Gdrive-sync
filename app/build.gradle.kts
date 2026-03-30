@@ -15,7 +15,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.hadiyarajesh.composetemplate"
+        applicationId = "com.kiran.gdrivesyncer.app"
         minSdk = 23
         targetSdk = 36
         versionCode = 1
@@ -25,10 +25,7 @@ android {
     }
 
     buildTypes {
-        debug {
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
-        }
+
 
         release {
             isMinifyEnabled = true
@@ -39,7 +36,20 @@ android {
             )
         }
     }
-
+packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/license.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/notice.txt",
+                "META-INF/ASL2.0"
+            )
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
@@ -97,6 +107,19 @@ dependencies {
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.ui.test.junit4)
     debugImplementation(libs.bundles.compose.ui.debug)
+
+    // Google Sign-In and Drive API
+    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // Background Sync & Drive API tools
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("com.google.api-client:google-api-client-android:2.2.0")
+    implementation("com.google.apis:google-api-services-drive:v3-rev20230822-2.0.0")
+    implementation("androidx.compose.runtime:runtime-livedata:1.7.0")
 }
 
 // Use the JUnit5 Platform for running tests
