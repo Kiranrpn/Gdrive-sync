@@ -52,6 +52,21 @@ class DriveSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
                 }
             }
 
+// --- SAVE HISTORY LOG (MAX 30 ENTRIES) ---
+            val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy - hh:mm a", java.util.Locale.getDefault())
+            val currentTime = dateFormat.format(java.util.Date())
+            val logMessage = "✅ $currentTime | Synced $processedFiles files ($syncMode)"
+            
+            val existingLogs = prefs.getString("sync_history", "") ?: ""
+            
+            // This takes the new log, adds the old ones, and throws away anything past 30 lines
+            val updatedLogs = (listOf(logMessage) + existingLogs.split("\n").filter { it.isNotBlank() })
+                .take(30) 
+                .joinToString("\n")
+            
+            prefs.edit().putString("sync_history", updatedLogs).apply()
+            // -----------------------------------------
+            
             return Result.success()
             } catch (e: Exception) {
             Log.e("SyncWorker", "Critical Failure: ${e.message}", e)

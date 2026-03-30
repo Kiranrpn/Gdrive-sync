@@ -75,9 +75,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun SyncScreen() {
     val context = LocalContext.current
+    
+    // 1. MUST BE DECLARED FIRST: Create the 'prefs' object
     val prefs = remember { context.getSharedPreferences("sync_prefs", Context.MODE_PRIVATE) }
 
-    // --- STATE VARIABLES ---
+    // 2. NOW we can safely use 'prefs' for all our state variables
     val initialFolders: List<String> =
         prefs.getStringSet("folder_uris", emptySet())?.toList()?.sorted() ?: emptyList()
 
@@ -85,8 +87,12 @@ fun SyncScreen() {
     var driveConnected by remember { mutableStateOf(prefs.getBoolean("drive_connected", false)) }
     var connectedEmail by remember { mutableStateOf(prefs.getString("user_email", "")) }
     
+    // Our new history variable safely reading from 'prefs'
+    var syncLogs by remember { mutableStateOf(prefs.getString("sync_history", "") ?: "") }
+    
     var showSyncDialog by remember { mutableStateOf(false) }
     var showInfoDialog by remember { mutableStateOf(false) }
+
 
     val workInfos by WorkManager.getInstance(context)
         .getWorkInfosByTagLiveData("sync_job")
@@ -191,14 +197,65 @@ fun SyncScreen() {
     }
 
     // --- DIALOGS ---
-    if (showInfoDialog) {
+
+if (showInfoDialog) {
+        // Automatically refresh the logs when the dialog opens
+        syncLogs = prefs.getString("sync_history", "")?.takeIf { it.isNotBlank() } ?: "No history yet."
+
         AlertDialog(
             onDismissRequest = { showInfoDialog = false },
-            title = { Text("About", fontWeight = FontWeight.Bold) },
-            text = { Text("Made with love by Kiran Rao ❤️") },
+            title = { Text("About & History", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Your signature
+                    Text(
+                        text = "Made with love by Kiran Rao ❤️", 
+                        modifier = Modifier.padding(bottom = 16.dp),
+                        fontSize = 14.sp
+                    )
+                    
+                    Text(
+                        text = "Recent Syncs (Last 30):", 
+                        fontWeight = FontWeight.Medium, 
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        fontSize = 14.sp
+                    )
+                    
+                    // The scrollable history box
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .background(Color(0xFFEEEEEE), RoundedCornerShape(8.dp))
+                            .padding(12.dp)
+                    ) {
+                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            item {
+                                Text(
+                                    text = syncLogs, 
+                                    fontSize = 12.sp, 
+                                    lineHeight = 18.sp,
+                                    color = Color.DarkGray
+                                )
+                            }
+                        }
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = { showInfoDialog = false }) {
                     Text("Close", color = Color(0xFF212121))
+                }
+            },
+            dismissButton = {
+                // Only show the Clear button if there is history to clear
+                if (syncLogs != "No history yet.") {
+                    TextButton(onClick = { 
+                        prefs.edit().remove("sync_history").apply()
+                        syncLogs = "No history yet."
+                    }) {
+                        Text("Clear History", color = Color.Red)
+                    }
                 }
             }
         )
