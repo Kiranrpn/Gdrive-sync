@@ -74,17 +74,42 @@ class DriveSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
         }
     }
 
-    private suspend fun syncDirectoryRecursive(service: Drive, localDir: DocumentFile, driveParentId: String, mode: String) {
+private suspend fun syncDirectoryRecursive(service: Drive, localDir: DocumentFile, driveParentId: String, mode: String) {
+        // We will store the names of all local files to compare later
+        val localNames = mutableSetOf<String>()
+
         localDir.listFiles().forEach { item ->
+            val itemName = item.name ?: return@forEach
+            localNames.add(itemName) // Track what exists locally
+
             if (item.isDirectory) {
                 // Mirror the subfolder structure
-                val newDriveFolderId = getOrCreateFolder(service, item.name ?: "Subfolder", driveParentId)
+                val newDriveFolderId = getOrCreateFolder(service, itemName, driveParentId)
                 syncDirectoryRecursive(service, item, newDriveFolderId, mode)
             } else {
                 // Upload the file
                 syncFile(service, item, driveParentId, mode)
                 processedFiles++
                 setProgress(workDataOf("progress" to (processedFiles * 100 / totalFiles)))
+            }
+        }
+
+        // --- NEW MIRRORING LOGIC ---
+        // If mode is "replace", delete files on Drive that no longer exist locally
+        if (mode == "replace") {
+            try {
+                // Fetch everything currently inside this specific Drive folder
+                val query = "'$driveParentId' in parents and trashed = false"
+                val existingDriveFiles = service.files().list().setQ(query).setFields("files(id, name)").execute().files
+
+                // Compare: If it's on Drive but NOT in our localNames list, delete it!
+                existingDriveFiles?.forEach { driveFile ->
+                    if (!localNames.contains(driveFile.name)) {
+                        service.files().delete(driveFile.id).execute()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("SyncWorker", "Failed to delete orphaned files: ${e.message}")
             }
         }
     }

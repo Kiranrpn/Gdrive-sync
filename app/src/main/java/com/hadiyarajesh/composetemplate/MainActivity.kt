@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
+import androidx.compose.material3.SwitchDefaults
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -286,9 +287,9 @@ Column(modifier = Modifier.weight(1f)) {
                     .fillMaxWidth()
                     .height(56.dp)
                     .padding(bottom = 16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6C7A5E))
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)) 
             ) {
-                Text("Sync Now")
+                Text("Sync Now", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
         }
 
@@ -298,9 +299,13 @@ Column(modifier = Modifier.weight(1f)) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Connect to Google Drive")
-            Switch(
+Switch(
                 checked = driveConnected,
-                onCheckedChange = { if (it) startAuth() else disconnectDrive() }
+                onCheckedChange = { if (it) startAuth() else disconnectDrive() },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Color(0xFF4CAF50) // Material Green
+                )
             )
         }
     }
